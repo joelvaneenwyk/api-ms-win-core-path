@@ -24,7 +24,12 @@
  *
  */
 
+#pragma warning(push)
+#pragma warning(disable : 4668)
+#pragma warning(disable : 5105)
 #include <Shlwapi.h>
+#pragma warning(pop)
+
 #pragma comment(lib, "Shlwapi.lib")
 
 #ifdef _WIN64
@@ -44,6 +49,11 @@
 #define PATHCCH_MAX_CCH 0x8000
 
 #define STRSAFE_E_INSUFFICIENT_BUFFER ((HRESULT)0x8007007AL)
+
+#pragma warning(push)
+#pragma warning(disable : 5045)  // Spectre mitigation
+#pragma warning(disable : 4711)  // function 'PathCchAddExtension' selected for
+                                 // automatic expansion inline
 
 HRESULT DLLAPI PathAllocCanonicalize(const WCHAR* path_in,
                                      DWORD flags,
@@ -105,18 +115,18 @@ static BOOL is_drive_spec(const WCHAR* str) {
 }
 
 static BOOL is_prefixed_unc(const WCHAR* string) {
-  return !wcsnicmp(string, L"\\\\?\\UNC\\", 8);
+  return _wcsnicmp(string, L"\\\\?\\UNC\\", 8) == 0;
 }
 
 static BOOL is_prefixed_disk(const WCHAR* string) {
-  return !wcsncmp(string, L"\\\\?\\", 4) && is_drive_spec(string + 4);
+  return wcsncmp(string, L"\\\\?\\", 4) == 0 && is_drive_spec(string + 4);
 }
 
 static BOOL is_prefixed_volume(const WCHAR* string) {
   const WCHAR* guid;
   INT i = 0;
 
-  if (wcsnicmp(string, L"\\\\?\\Volume", 10))
+  if (_wcsnicmp(string, L"\\\\?\\Volume", 10))
     return FALSE;
 
   guid = string + 10;
@@ -666,8 +676,8 @@ BOOL DLLAPI PathCchIsRoot(const WCHAR* path) {
   if (!root_end)
     return FALSE;
 
-  if ((is_unc = is_prefixed_unc(path)) ||
-      (path[0] == '\\' && path[1] == '\\' && path[2] != '?')) {
+  is_unc = is_prefixed_unc(path);
+  if (is_unc || (path[0] == '\\' && path[1] == '\\' && path[2] != '?')) {
     next = root_end + 1;
     /* No extra segments */
     if ((is_unc && !*next) || (!is_unc && !*next))
@@ -747,7 +757,7 @@ HRESULT DLLAPI PathCchRemoveExtension(WCHAR* path, SIZE_T size) {
     return hr;
 
   next = path + (extension - path);
-  while (next - path < size && *next)
+  while ((SIZE_T)(next - path) < size && *next)
     *next++ = 0;
 
   return next == extension ? S_FALSE : S_OK;
@@ -776,7 +786,7 @@ HRESULT DLLAPI PathCchRemoveFileSpec(WCHAR* path, SIZE_T size) {
   length = lstrlenW(path);
   last = path + length - 1;
   while (last >= path && (!root_end || last >= root_end)) {
-    if (last - path >= size)
+    if ((SIZE_T)(last - path) >= size)
       return E_INVALIDARG;
 
     if (*last == '\\') {
@@ -805,7 +815,7 @@ HRESULT DLLAPI PathCchRenameExtension(WCHAR* path,
 
 HRESULT DLLAPI PathCchSkipRoot(const WCHAR* path, const WCHAR** root_end) {
   if (!path || !path[0] || !root_end ||
-      (!wcsnicmp(path, L"\\\\?", 3) && !is_prefixed_volume(path) &&
+      (_wcsnicmp(path, L"\\\\?", 3) == 0 && !is_prefixed_volume(path) &&
        !is_prefixed_unc(path) && !is_prefixed_disk(path)))
     return E_INVALIDARG;
 
@@ -833,13 +843,13 @@ HRESULT DLLAPI PathCchStripPrefix(WCHAR* path, SIZE_T size) {
 
   if (is_prefixed_unc(path)) {
     /* \\?\UNC\a -> \\a */
-    if (size < lstrlenW(path + 8) + 3)
+    if (size < (unsigned long long)(lstrlenW(path + 8)) + 3)
       return E_INVALIDARG;
     lstrcpyW(path + 2, path + 8);
     return S_OK;
   } else if (is_prefixed_disk(path)) {
     /* \\?\C:\ -> C:\ */
-    if (size < lstrlenW(path + 4) + 1)
+    if (size < (unsigned long long)(lstrlenW(path + 4)) + 1)
       return E_INVALIDARG;
     lstrcpyW(path, path + 4);
     return S_OK;
@@ -858,22 +868,22 @@ HRESULT DLLAPI PathCchStripToRoot(WCHAR* path, SIZE_T size) {
   /* \\\\?\\UNC\\* and \\\\* have to have at least two extra segments to be
    * striped, e.g. \\\\?\\UNC\\a\\b\\c -> \\\\?\\UNC\\a\\b
    *      \\\\a\\b\\c         -> \\\\a\\b         */
-  if ((is_unc = is_prefixed_unc(path)) ||
-      (path[0] == '\\' && path[1] == '\\' && path[2] != '?')) {
+  is_unc = is_prefixed_unc(path);
+  if (is_unc || (path[0] == '\\' && path[1] == '\\' && path[2] != '?')) {
     root_end = is_unc ? path + 8 : path + 3;
     if (!get_next_segment(root_end, &root_end))
       return S_FALSE;
     if (!get_next_segment(root_end, &root_end))
       return S_FALSE;
 
-    if (root_end - path >= size)
+    if ((SIZE_T)(root_end - path) >= size)
       return E_INVALIDARG;
 
     segment_end = path + (root_end - path) - 1;
     *segment_end = 0;
     return S_OK;
   } else if (PathCchSkipRoot(path, &root_end) == S_OK) {
-    if (root_end - path >= size)
+    if ((SIZE_T)(root_end - path) >= size)
       return E_INVALIDARG;
 
     segment_end = path + (root_end - path);
@@ -898,3 +908,5 @@ BOOL DLLAPI PathIsUNCEx(const WCHAR* path, const WCHAR** server) {
     *server = result;
   return !!result;
 }
+
+#pragma warning(pop)
